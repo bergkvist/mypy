@@ -268,9 +268,19 @@ class PatternChecker(PatternVisitor[PatternType]):
                     return self.early_non_match()
         else:
             inner_type = self.get_sequence_type(current_type, o)
+            if isinstance(inner_type, TupleType):
+                captures = {}
+                for t, p in zip(inner_type.items, o.patterns):
+                    if isinstance(p, AsPattern) and isinstance(p.name, NameExpr):
+                        captures[p.name] = t
+
+                return PatternType(
+                    type=inner_type,
+                    rest_type=current_type,  # TODO: Subtract inner_type from here
+                    captures=captures,
+                )
             if inner_type is None:
-                inner_type = self.chk.named_type("builtins.object")
-            inner_types = [inner_type] * len(o.patterns)
+                inner_types = [self.chk.named_type("builtins.object")] * len(o.patterns)
 
         #
         # match inner patterns
@@ -345,13 +355,23 @@ class PatternChecker(PatternVisitor[PatternType]):
         t = get_proper_type(t)
         if isinstance(t, AnyType):
             return AnyType(TypeOfAny.from_another_any, t)
+
+        if isinstance(t, TupleType) and isinstance(context, SequencePattern):
+            for t0, p0 in zip(t.items, context.patterns):
+                if isinstance(t0, LiteralType) and isinstance(p0, ValuePattern):
+                    if hasattr(p0.expr, "value") and t0.value != p0.expr.value:
+                        return None
+            return t
+
         if isinstance(t, UnionType):
             items = [self.get_sequence_type(item, context) for item in t.items]
             not_none_items = [item for item in items if item is not None]
-            if not_none_items:
-                return make_simplified_union(not_none_items)
-            else:
+            if len(not_none_items) == 0:
                 return None
+            elif len(not_none_items) == 1:
+                return not_none_items[0]
+            else:
+                return UnionType(items=not_none_items)
 
         if self.chk.type_is_iterable(t) and isinstance(t, (Instance, TupleType)):
             if isinstance(t, TupleType):
